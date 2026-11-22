@@ -43,6 +43,8 @@ export async function getServerInfo(ctx: ContextBase, encryptParams: boolean) {
                 type: ctx.API_TYPE,
                 client_version: ctx.API_VERSION,
                 computer_name: "Web",
+                sp_mtn: -1,
+                bkt: -1,
                 signkey: encryptedParams.params.signkey,
             },
             false,
@@ -81,6 +83,8 @@ async function getEncryptParam(ctx: ContextBase, encryptParams: boolean, type: s
                   type: ctx.API_TYPE,
                   client_version: ctx.API_VERSION,
                   computer_name: "Web",
+                  sp_mtn: -1,
+                  bkt: -1,
               })
             : getSignKey(type, params);
 

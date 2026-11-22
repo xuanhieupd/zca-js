@@ -142,7 +142,7 @@ export class Zalo {
     }
 
     public async loginQR(
-        options?: { userAgent?: string; language?: string; qrPath?: string },
+        options?: { userAgent?: string; language?: string; qrPath?: string; imei?: string },
         callback?: LoginQRCallback,
     ) {
         if (!options) options = {};
@@ -160,7 +160,7 @@ export class Zalo {
         );
         if (!loginQRResult) throw new ZaloApiError("Unable to login with QRCode");
 
-        const imei = generateZaloUUID(options.userAgent);
+        const imei = options.imei ?? generateZaloUUID(options.userAgent);
 
         if (callback) {
             // Thanks to @YanCastle for this great suggestion!

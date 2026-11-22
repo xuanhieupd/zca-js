@@ -259,6 +259,13 @@ export function decodeAES(secretKey: string, data: string, t = 0): string | null
     }
 }
 
+export function acceptLanguageOf(language?: string) {
+    const normalized = (language || "vi").toLowerCase();
+    if (normalized.startsWith("vi")) return "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7";
+    if (normalized.startsWith("en")) return "en-US,en;q=0.9";
+    return `${normalized},en-US;q=0.8,en;q=0.7`;
+}
+
 export async function getDefaultHeaders(ctx: ContextBase, origin: string = "https://chat.zalo.me") {
     if (!ctx.cookie) throw new ZaloApiError("Cookie is not available");
     if (!ctx.userAgent) throw new ZaloApiError("User agent is not available");
@@ -266,7 +273,7 @@ export async function getDefaultHeaders(ctx: ContextBase, origin: string = "http
     return {
         Accept: "application/json, text/plain, */*",
         "Accept-Encoding": "gzip, deflate, br, zstd",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": acceptLanguageOf(ctx.language),
         "content-type": "application/x-www-form-urlencoded",
         Cookie: await ctx.cookie.getCookieString(origin),
         Origin: "https://chat.zalo.me",
@@ -288,11 +295,13 @@ export async function request(ctx: ContextBase, url: string, options?: RequestIn
 
     const _options = {
         ...(options ?? {}),
-        ...(isBun ? { 
-            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-ignore
-            proxy: ctx.options.agent?.proxy?.href
-        } : { agent: ctx.options.agent }),
+        ...(isBun
+            ? {
+                  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+                  // @ts-ignore
+                  proxy: ctx.options.agent?.proxy?.href,
+              }
+            : { agent: ctx.options.agent }),
     };
 
     const response = await ctx.options.polyfill(url, _options);
@@ -311,7 +320,11 @@ export async function request(ctx: ContextBase, url: string, options?: RequestIn
         for (const cookie of cookieStrings) {
             const parsed = toughCookie.Cookie.parse(cookie);
             try {
-                if (parsed) await ctx.cookie.setCookie(parsed, parsed.domain != "zalo.me" ? `https://${parsed.domain}` : origin);
+                if (parsed)
+                    await ctx.cookie.setCookie(
+                        parsed,
+                        parsed.domain != "zalo.me" ? `https://${parsed.domain}` : origin,
+                    );
             } catch (error: unknown) {
                 logger(ctx).error(error);
             }
