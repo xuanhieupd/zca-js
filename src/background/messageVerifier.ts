@@ -11,9 +11,9 @@ export type VerifyMessageRequest = {
 export type VerifyMessageResult = { error?: number; reqId?: string };
 
 export type MessageVerifierOptions = {
-    interval: number;
-    batchSize: number;
-    retryMissDelay: number;
+    interval: () => number;
+    batchSize: () => number;
+    retryMissDelay: () => number;
     nextRequestId: () => string;
     send: (request: VerifyMessageRequest) => void;
 };
@@ -36,7 +36,7 @@ export class MessageVerifier {
     start() {
         this.started = true;
         this.queues.forEach((ids, queueName) => {
-            if (ids.length >= this.options.batchSize) this.verify(queueName);
+            if (ids.length >= this.options.batchSize()) this.verify(queueName);
         });
     }
 
@@ -57,7 +57,7 @@ export class MessageVerifier {
             verifying.retryTimer = setTimeout(() => {
                 this.verifying.delete(result.reqId!);
                 this.verify(verifying.queueName, verifying.retry + 1);
-            }, this.options.retryMissDelay);
+            }, this.options.retryMissDelay());
             return;
         }
         this.finish(result.reqId!, verifying);
@@ -86,7 +86,7 @@ export class MessageVerifier {
             queue.push(id);
         }
         queue.sort((left, right) => (isNewerActionId(left, right) ? 1 : left === right ? 0 : -1));
-        if (queue.length >= this.options.batchSize + 2) {
+        if (queue.length >= this.options.batchSize() + 2) {
             this.verify(queueName);
             return;
         }
@@ -96,7 +96,7 @@ export class MessageVerifier {
             setTimeout(() => {
                 this.timers.delete(queueName);
                 this.verify(queueName);
-            }, this.options.interval),
+            }, this.options.interval()),
         );
     }
 
@@ -104,7 +104,7 @@ export class MessageVerifier {
         if (!this.started || this.isVerifying(queueName)) return;
         clearTimeout(this.timers.get(queueName));
         this.timers.delete(queueName);
-        const batch = (this.queues.get(queueName) ?? []).slice(0, this.options.batchSize);
+        const batch = (this.queues.get(queueName) ?? []).slice(0, this.options.batchSize());
         if (batch.length < 2) return;
         const reqId = this.options.nextRequestId();
         this.verifying.set(reqId, { queueName, batch, retry });
@@ -125,7 +125,7 @@ export class MessageVerifier {
             verifying.queueName,
             queue.filter((id) => !verified.includes(id)),
         );
-        if (queue.length - verified.length >= this.options.batchSize) this.verify(verifying.queueName);
+        if (queue.length - verified.length >= this.options.batchSize()) this.verify(verifying.queueName);
     }
 
     private isVerifying(queueName: string) {

@@ -1,8 +1,12 @@
 {
     "name": "zca-js",
-    "version": "2.3.0",
+    "version": "2.3.0-bg.1",
     "description": "Unofficial Zalo API for JavaScript",
     "main": "dist/index.js",
+    "files": [
+        "dist",
+        "index.d.ts"
+    ],
     "type": "module",
     "exports": {
         ".": {

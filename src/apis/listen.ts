@@ -182,13 +182,13 @@ export class Listener extends EventEmitter<ListenerEvents> {
 
         this.tasks = { ...DEFAULT_BACKGROUND_TASK_OPTIONS, ...ctx.options.backgroundTasks };
         const store = this.tasks.queueCursorStore ?? new MemoryQueueCursorStore();
-        const socket = ctx.settings.features.socket;
+        const socketSettings = () => ctx.settings.features.socket;
         const onError = (error: unknown) => this.emit("error", error);
 
         this.heartbeat = new SocketHeartbeat({
-            interval: socket.ping_interval,
+            interval: () => socketSettings().ping_interval,
             pongTimeout: SOCKET_TIMING_DEFAULTS.pongTimeout,
-            maxSilence: socket.ping_max_timeout ?? SOCKET_TIMING_DEFAULTS.maxSilence,
+            maxSilence: () => socketSettings().ping_max_timeout ?? SOCKET_TIMING_DEFAULTS.maxSilence,
             pongRetryDelays: this.retryDelaysOf("5013"),
             send: (eventId) =>
                 this.sendWs(
@@ -201,7 +201,7 @@ export class Listener extends EventEmitter<ListenerEvents> {
 
         this.offlineSync = new OfflineQueueSync({
             store,
-            timeout: socket.offline_timeout ?? SOCKET_TIMING_DEFAULTS.offlineTimeout,
+            timeout: () => socketSettings().offline_timeout ?? SOCKET_TIMING_DEFAULTS.offlineTimeout,
             nextRequestId: () => this.nextRequestId(),
             send: (request) => this.sendWs({ version: 1, ...request }, false),
             onDone: (queueKeys) => {
@@ -214,8 +214,8 @@ export class Listener extends EventEmitter<ListenerEvents> {
 
         this.missingMessages = new MissingMessageFetcher({
             store,
-            batchDelay: socket.delay_get_msg ?? SOCKET_TIMING_DEFAULTS.getMessageDelay,
-            batchSize: socket.max_msg_get ?? SOCKET_TIMING_DEFAULTS.getMessageBatch,
+            batchDelay: () => socketSettings().delay_get_msg ?? SOCKET_TIMING_DEFAULTS.getMessageDelay,
+            batchSize: () => socketSettings().max_msg_get ?? SOCKET_TIMING_DEFAULTS.getMessageBatch,
             retryDelay: SOCKET_TIMING_DEFAULTS.getMessageRetryDelay,
             maxRetries: SOCKET_TIMING_DEFAULTS.getMessageMaxRetries,
             nextRequestId: () => this.nextRequestId(),
@@ -224,27 +224,28 @@ export class Listener extends EventEmitter<ListenerEvents> {
         });
 
         this.verifier = new MessageVerifier({
-            interval: socket.interval_verify || SOCKET_TIMING_DEFAULTS.verifyInterval,
-            batchSize: socket.max_msg_verify || SOCKET_TIMING_DEFAULTS.verifyBatch,
-            retryMissDelay: socket.timeout_retry_miss || SOCKET_TIMING_DEFAULTS.verifyRetryMiss,
+            interval: () => socketSettings().interval_verify || SOCKET_TIMING_DEFAULTS.verifyInterval,
+            batchSize: () => socketSettings().max_msg_verify || SOCKET_TIMING_DEFAULTS.verifyBatch,
+            retryMissDelay: () => socketSettings().timeout_retry_miss || SOCKET_TIMING_DEFAULTS.verifyRetryMiss,
             nextRequestId: () => this.nextRequestId(),
             send: (request) => this.sendWs({ version: 1, ...request }, false),
         });
 
         this.serverInfoTask = new PeriodicTask(
-            SOCKET_TIMING_DEFAULTS.serverInfoInterval,
+            () => SOCKET_TIMING_DEFAULTS.serverInfoInterval,
             () => this.refreshServerInfo(),
             onError,
         );
 
-        const keepAliveSeconds =
-            Number(ctx.settings.keepalive?.keepalive_duration) || SOCKET_TIMING_DEFAULTS.keepAliveSeconds;
-        this.keepAliveTask = new PeriodicTask(keepAliveSeconds * 1000, () => this.keepAlive(), onError);
+        this.keepAliveTask = new PeriodicTask(
+            () =>
+                (Number(ctx.settings.keepalive?.keepalive_duration) || SOCKET_TIMING_DEFAULTS.keepAliveSeconds) * 1000,
+            () => this.keepAlive(),
+            onError,
+        );
 
-        const activeInterval =
-            Number(ctx.settings.online_configs?.update_action_interval) || SOCKET_TIMING_DEFAULTS.activeInterval;
         this.activeTask = new PeriodicTask(
-            activeInterval,
+            () => Number(ctx.settings.online_configs?.update_action_interval) || SOCKET_TIMING_DEFAULTS.activeInterval,
             () => this.sendActiveStatus(ActiveStatus.KeepActiveForeground),
             onError,
         );

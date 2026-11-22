@@ -1,21 +1,28 @@
 export class PeriodicTask {
-    private timer?: ReturnType<typeof setInterval>;
+    private timer?: ReturnType<typeof setTimeout>;
 
     constructor(
-        private readonly interval: number,
+        private readonly interval: () => number,
         private readonly run: () => Promise<unknown> | unknown,
         private readonly onError: (error: unknown) => void,
     ) {}
 
     start(runNow = false) {
         this.stop();
-        this.timer = setInterval(() => this.tick(), this.interval);
+        this.schedule();
         if (runNow) this.tick();
     }
 
     stop() {
-        clearInterval(this.timer);
+        clearTimeout(this.timer);
         this.timer = undefined;
+    }
+
+    private schedule() {
+        this.timer = setTimeout(() => {
+            this.schedule();
+            this.tick();
+        }, this.interval());
     }
 
     private tick() {

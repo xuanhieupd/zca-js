@@ -16,8 +16,8 @@ export type GetMessageRequest = {
 
 export type MissingMessageFetcherOptions = {
     store: QueueCursorStore;
-    batchDelay: number;
-    batchSize: number;
+    batchDelay: () => number;
+    batchSize: () => number;
     retryDelay: number;
     maxRetries: number;
     nextRequestId: () => string;
@@ -41,7 +41,7 @@ export class MissingMessageFetcher {
         this.batchTimer = setTimeout(() => {
             this.batchTimer = undefined;
             this.flush().catch(this.options.onError);
-        }, this.options.batchDelay);
+        }, this.options.batchDelay());
     }
 
     received(msgIds: unknown[]) {
@@ -69,8 +69,9 @@ export class MissingMessageFetcher {
             grouped.set(queueKeyOf(queueId), group);
         }
         for (const { queueId, ids } of grouped.values()) {
-            for (let index = 0; index < ids.length; index += this.options.batchSize) {
-                await this.request(queueId, ids.slice(index, index + this.options.batchSize), 0);
+            const batchSize = this.options.batchSize();
+            for (let index = 0; index < ids.length; index += batchSize) {
+                await this.request(queueId, ids.slice(index, index + batchSize), 0);
             }
         }
     }

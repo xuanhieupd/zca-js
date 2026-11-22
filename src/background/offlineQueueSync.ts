@@ -17,7 +17,7 @@ export type OfflineQueueRequest = {
 
 export type OfflineQueueSyncOptions = {
     store: QueueCursorStore;
-    timeout: number;
+    timeout: () => number;
     nextRequestId: () => string;
     send: (request: OfflineQueueRequest) => void;
     onDone: (queueKeys: string[]) => void;
@@ -54,7 +54,7 @@ export class OfflineQueueSync {
         this.timer = setTimeout(() => {
             this.stop();
             this.options.onTimeout();
-        }, this.options.timeout);
+        }, this.options.timeout());
         resumable.forEach(({ queue, lastId }) => this.request(queue, true, lastId));
     }
 

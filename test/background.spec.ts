@@ -12,9 +12,9 @@ describe("SocketHeartbeat", () => {
         const sent: number[] = [];
         const outcomes: string[] = [];
         const heartbeat = new SocketHeartbeat({
-            interval: 1000,
+            interval: () => 1000,
             pongTimeout: 20,
-            maxSilence: 10_000,
+            maxSilence: () => 10_000,
             pongRetryDelays: [5],
             send: (eventId) => sent.push(eventId),
             onPingTimeout: () => outcomes.push("timeout"),
@@ -61,7 +61,7 @@ describe("SocketHeartbeat", () => {
     });
 
     it("reports silence when the last pong is older than the limit", async () => {
-        const { heartbeat, sent, outcomes } = heartbeatWith({ maxSilence: 10 });
+        const { heartbeat, sent, outcomes } = heartbeatWith({ maxSilence: () => 10 });
         heartbeat.start();
         heartbeat.receivePong(sent[0]);
         await wait(20);
@@ -78,7 +78,7 @@ describe("OfflineQueueSync", () => {
         let requestId = 0;
         const sync = new OfflineQueueSync({
             store,
-            timeout: 50,
+            timeout: () => 50,
             nextRequestId: () => `req_${requestId++}`,
             send: (request) => sent.push(request),
             onDone: (keys) => done.push(keys),
@@ -154,8 +154,8 @@ describe("MissingMessageFetcher", () => {
         let requestId = 0;
         const fetcher = new MissingMessageFetcher({
             store,
-            batchDelay: 5,
-            batchSize: 2,
+            batchDelay: () => 5,
+            batchSize: () => 2,
             retryDelay: 20,
             maxRetries: 1,
             nextRequestId: () => `req_${requestId++}`,
@@ -166,7 +166,13 @@ describe("MissingMessageFetcher", () => {
         });
         const queueId = { cmd: 501, subCmd: 0 };
         fetcher.announce({ queueId, ids: [{ actionId: "1", msgId: "a" }] });
-        fetcher.announce({ queueId, ids: [{ actionId: "2", msgId: "b" }, { actionId: "3", msgId: "c" }] });
+        fetcher.announce({
+            queueId,
+            ids: [
+                { actionId: "2", msgId: "b" },
+                { actionId: "3", msgId: "c" },
+            ],
+        });
         await wait(15);
         expect(sent.map((request) => request.data.ids.map((id) => id.msgId))).toEqual([["a", "b"], ["c"]]);
         expect(sent.every((request) => request.cmd === 570 && request.data.lastId === "42")).toBe(true);
@@ -194,9 +200,9 @@ describe("MessageVerifier", () => {
         const sent: VerifyMessageRequest[] = [];
         let requestId = 0;
         const verifier = new MessageVerifier({
-            interval: 20,
-            batchSize: 3,
-            retryMissDelay: 20,
+            interval: () => 20,
+            batchSize: () => 3,
+            retryMissDelay: () => 20,
             nextRequestId: () => `req_${requestId++}`,
             send: (request) => sent.push(request),
         });

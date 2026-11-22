@@ -1,7 +1,7 @@
 export type SocketHeartbeatOptions = {
-    interval: number;
+    interval: () => number;
     pongTimeout: number;
-    maxSilence: number;
+    maxSilence: () => number;
     pongRetryDelays: number[];
     send: (eventId: number) => void;
     onPingTimeout: () => void;
@@ -9,7 +9,7 @@ export type SocketHeartbeatOptions = {
 };
 
 export class SocketHeartbeat {
-    private intervalTimer?: ReturnType<typeof setInterval>;
+    private intervalTimer?: ReturnType<typeof setTimeout>;
     private pongTimer?: ReturnType<typeof setTimeout>;
     private retryTimer?: ReturnType<typeof setTimeout>;
     private lastPing = 0;
@@ -20,12 +20,12 @@ export class SocketHeartbeat {
 
     start() {
         this.stop();
-        this.intervalTimer = setInterval(() => this.ping(), this.options.interval);
+        this.schedulePing();
         this.ping();
     }
 
     ping() {
-        if (this.lastPong !== null && Date.now() - this.lastPong > this.options.maxSilence) {
+        if (this.lastPong !== null && Date.now() - this.lastPong > this.options.maxSilence()) {
             this.stop();
             this.options.onSilence();
             return;
@@ -45,7 +45,7 @@ export class SocketHeartbeat {
     }
 
     stop() {
-        clearInterval(this.intervalTimer);
+        clearTimeout(this.intervalTimer);
         clearTimeout(this.pongTimer);
         clearTimeout(this.retryTimer);
         this.intervalTimer = undefined;
@@ -53,6 +53,13 @@ export class SocketHeartbeat {
         this.retryTimer = undefined;
         this.lastPong = null;
         this.pongRetries = 0;
+    }
+
+    private schedulePing() {
+        this.intervalTimer = setTimeout(() => {
+            this.schedulePing();
+            this.ping();
+        }, this.options.interval());
     }
 
     private missPong() {

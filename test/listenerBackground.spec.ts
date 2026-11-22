@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { WebSocketServer, type WebSocket as ServerSocket } from "ws";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { once } from "node:events";
 import toughCookie from "tough-cookie";
 import { CloseReason, Listener } from "../src/apis/listen.js";
 import { MemoryQueueCursorStore } from "../src/background/queueCursorStore.js";
@@ -22,6 +22,41 @@ function encodeFrame(cmd: number, subCmd: number, body: Record<string, unknown>)
 function decodeFrame(raw: Buffer): Frame {
     return { cmd: raw.readUInt16LE(1), subCmd: raw.readUInt8(3), data: JSON.parse(raw.subarray(4).toString()) };
 }
+
+class TestSocket {
+    static readonly CLOSED = 3;
+    static current: TestSocket;
+    readyState = 1;
+    onopen?: () => void;
+    onclose?: (event: { code: number; reason: string }) => void;
+    onmessage?: (event: { data: Buffer }) => Promise<void>;
+    onFrame?: (socket: TestSocket, frame: Frame) => void;
+
+    constructor() {
+        TestSocket.current = this;
+        queueMicrotask(() => this.onopen?.());
+    }
+
+    send(data: DataView) {
+        const frame = decodeFrame(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+        queueMicrotask(() => this.onFrame?.(this, frame));
+    }
+
+    receive(data: Buffer) {
+        queueMicrotask(() => void this.onmessage?.({ data }));
+    }
+
+    close(code: number) {
+        this.readyState = TestSocket.CLOSED;
+        queueMicrotask(() => this.onclose?.({ code, reason: "" }));
+    }
+
+    terminate() {
+        this.close(1006);
+    }
+}
+
+mock.module("ws", () => ({ default: TestSocket }));
 
 const plain = (data: unknown) => ({ error_code: 0, encrypt: 0, data: JSON.stringify({ data }) });
 
@@ -78,47 +113,80 @@ const userMessage = (msgId: string) => ({
 });
 
 describe("Listener background tasks", () => {
-    let server: WebSocketServer | null = null;
     let listener: Listener | null = null;
 
     afterEach(() => {
         listener?.stop();
-        server?.close();
-        server = null;
         listener = null;
     });
 
-    async function connect(store: MemoryQueueCursorStore, onFrame: (socket: ServerSocket, frame: Frame) => void) {
-        server = new WebSocketServer({ port: 0 });
-        const port = (server.address() as { port: number }).port;
-        const connected = new Promise<ServerSocket>((resolve) => {
-            server!.on("connection", (socket) => {
-                socket.on("message", (raw: Buffer) => onFrame(socket, decodeFrame(raw)));
-                resolve(socket);
-            });
-        });
-        listener = new Listener(contextFor(store), [`ws://127.0.0.1:${port}/?zpw_ver=1`]);
+    function connect(
+        store: MemoryQueueCursorStore,
+        onFrame: (socket: TestSocket, frame: Frame) => void,
+        beforeStart?: (context: ContextSession) => void,
+    ) {
+        const context = contextFor(store);
+        listener = new Listener(context, ["ws://localhost/?zpw_ver=1"]);
+        beforeStart?.(context);
         listener.start();
-        return connected;
+        const socket = TestSocket.current;
+        socket.onFrame = onFrame;
+        return socket;
     }
 
-    it("answers pings, resumes offline queues from the cursor and emits the pulled messages", async () => {
+    it("uses a ping interval changed after construction and a silence limit changed while connected", async () => {
+        let context!: ContextSession;
+        let pings = 0;
+        const socket = connect(
+            new MemoryQueueCursorStore(),
+            (serverSocket, frame) => {
+                if (frame.cmd !== 2) return;
+                pings++;
+                if (pings === 2) {
+                    context.settings = {
+                        ...context.settings,
+                        features: {
+                            ...context.settings.features,
+                            socket: { ...context.settings.features.socket, ping_max_timeout: 0 },
+                        },
+                    };
+                }
+                serverSocket.receive(encodeFrame(2, 1, { error_code: 0, eventId: frame.data.eventId }));
+            },
+            (current) => {
+                context = current;
+                current.settings.features.socket.ping_interval = 60;
+            },
+        );
+        const closed = once(listener!, "closed", { signal: AbortSignal.timeout(1_500) });
+        socket.receive(encodeFrame(1, 1, { key: "irrelevant" }));
+
+        expect(await closed).toEqual([CloseReason.AbnormalStopPing, "AbnormalStopPing"]);
+        expect(pings).toBe(2);
+    });
+
+    it("resumes offline queues and emits their data through the live events", async () => {
         const store = new MemoryQueueCursorStore();
         store.set("510_1", "100");
         store.set("603_1", "300");
+        store.set("610_0", "400");
         const received: Frame[] = [];
         const messages: Message[] = [];
-        const done: string[][] = [];
-        const socket = await connect(store, (serverSocket, frame) => {
+        const offlineEvents: string[] = [];
+        const socket = connect(store, (serverSocket, frame) => {
             received.push(frame);
-            if (frame.cmd === 2) serverSocket.send(encodeFrame(2, 1, { error_code: 0, eventId: frame.data.eventId }));
+            if (frame.cmd === 2)
+                serverSocket.receive(encodeFrame(2, 1, { error_code: 0, eventId: frame.data.eventId }));
             if (frame.cmd === 603) {
-                serverSocket.send(
+                serverSocket.receive(
                     encodeFrame(
                         603,
                         1,
                         plain({
-                            controls: [],
+                            controls: [
+                                { content: { act_type: "group", act: "update", data: { groupId: "234" } } },
+                                { content: { act_type: "fr", act: "add", data: "345" } },
+                            ],
                             more: 0,
                             lastActionId: "301",
                             queueStatus: { "603_1": { lastId: "301" } },
@@ -126,9 +194,22 @@ describe("Listener background tasks", () => {
                     ),
                 );
             }
+            if (frame.cmd === 610) {
+                serverSocket.receive(
+                    encodeFrame(
+                        610,
+                        0,
+                        plain({
+                            reacts: [{ ...userMessage("401"), content: { rIcon: "like", rType: 1 } }],
+                            more: 0,
+                            queueStatus: { "610_0": { lastId: "401" } },
+                        }),
+                    ),
+                );
+            }
             if (frame.cmd === 510) {
                 const last = frame.data.first;
-                serverSocket.send(
+                serverSocket.receive(
                     encodeFrame(
                         510,
                         1,
@@ -141,7 +222,10 @@ describe("Listener background tasks", () => {
                                       queueStatus: { "510_1": { lastId: "101" } },
                                   }
                                 : {
-                                      msgs: [userMessage("102")],
+                                      msgs: [
+                                          userMessage("102"),
+                                          { ...userMessage("103"), content: { deleteMsg: true, globalMsgId: "102" } },
+                                      ],
                                       more: 0,
                                       lastActionId: "102",
                                       queueStatus: { "510_1": { lastId: "102" } },
@@ -152,9 +236,13 @@ describe("Listener background tasks", () => {
             }
         });
         listener!.on("message", (message) => messages.push(message));
-        listener!.on("offline_done", (keys) => done.push(keys));
+        listener!.on("undo", (undo) => offlineEvents.push(`undo:${undo.data.msgId}`));
+        listener!.on("reaction", (reaction) => offlineEvents.push(`reaction:${reaction.data.msgId}`));
+        listener!.on("group_event", (event) => offlineEvents.push(`group_event:${event.threadId}`));
+        listener!.on("friend_event", (event) => offlineEvents.push(`friend_event:${event.threadId}`));
+        const done = once(listener!, "offline_done", { signal: AbortSignal.timeout(1_500) });
 
-        socket.send(
+        socket.receive(
             encodeFrame(1, 1, {
                 key: "irrelevant",
                 ...plain({
@@ -162,12 +250,15 @@ describe("Listener background tasks", () => {
                         { cmd: 515, subCmd: 0, queueName: "515_0" },
                         { cmd: 510, subCmd: 1, queueName: "510_1" },
                     ],
-                    ctrl_qCmds: [{ cmd: 603, subCmd: 1, queueName: "603_1" }],
+                    ctrl_qCmds: [
+                        { cmd: 603, subCmd: 1, queueName: "603_1" },
+                        { cmd: 610, subCmd: 0, queueName: "610_0" },
+                    ],
                     bk_cmds: { "510_1": "510_0" },
                 }),
             }),
         );
-        await wait(150);
+        expect(await done).toEqual([["510_1", "603_1", "610_0"]]);
 
         expect(received.find((frame) => frame.cmd === 2)?.subCmd).toBe(1);
         const pulls = received.filter((frame) => frame.cmd === 510);
@@ -178,7 +269,7 @@ describe("Listener background tasks", () => {
         expect(received.some((frame) => frame.cmd === 515)).toBe(false);
         expect(messages.map((message) => message.data.msgId)).toEqual(["101", "102"]);
         expect(received.find((frame) => frame.cmd === 603)?.data).toMatchObject({ first: true, lastId: "300" });
-        expect(done).toEqual([["510_1", "603_1"]]);
+        expect(offlineEvents.sort()).toEqual(["friend_event:345", "group_event:234", "reaction:401", "undo:103"]);
         expect(store.get("510_1")).toBe("102");
         expect(store.get("603_1")).toBe("301");
     });
@@ -187,18 +278,19 @@ describe("Listener background tasks", () => {
         const store = new MemoryQueueCursorStore();
         const received: Frame[] = [];
         const messages: Message[] = [];
-        const socket = await connect(store, (serverSocket, frame) => {
+        const socket = connect(store, (serverSocket, frame) => {
             received.push(frame);
-            if (frame.cmd === 2) serverSocket.send(encodeFrame(2, 1, { error_code: 0, eventId: frame.data.eventId }));
-            if (frame.cmd === 570) serverSocket.send(encodeFrame(570, 0, plain({ msgs: [userMessage("201")] })));
+            if (frame.cmd === 2)
+                serverSocket.receive(encodeFrame(2, 1, { error_code: 0, eventId: frame.data.eventId }));
+            if (frame.cmd === 570) serverSocket.receive(encodeFrame(570, 0, plain({ msgs: [userMessage("201")] })));
         });
         listener!.on("message", (message) => messages.push(message));
 
-        socket.send(encodeFrame(1, 1, { key: "irrelevant" }));
-        socket.send(
+        socket.receive(encodeFrame(1, 1, { key: "irrelevant" }));
+        socket.receive(
             encodeFrame(501, 0, plain({ msgs: [userMessage("200")], queueStatus: { "501_0": { lastId: "200" } } })),
         );
-        socket.send(
+        socket.receive(
             encodeFrame(533, 0, plain({ queueId: { cmd: 501, subCmd: 0 }, ids: [{ actionId: "201", msgId: "201" }] })),
         );
         await wait(150);
@@ -211,7 +303,7 @@ describe("Listener background tasks", () => {
 
     it("closes with an internal reason when the server never authenticates", async () => {
         const closed: number[] = [];
-        await connect(new MemoryQueueCursorStore(), () => {});
+        connect(new MemoryQueueCursorStore(), () => {});
         listener!.on("closed", (code) => closed.push(code));
         await wait(1_300);
         expect(closed).toEqual([CloseReason.AuthTimeout]);
