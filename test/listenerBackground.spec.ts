@@ -105,12 +105,27 @@ describe("Listener background tasks", () => {
     it("answers pings, resumes offline queues from the cursor and emits the pulled messages", async () => {
         const store = new MemoryQueueCursorStore();
         store.set("510_1", "100");
+        store.set("603_1", "300");
         const received: Frame[] = [];
         const messages: Message[] = [];
         const done: string[][] = [];
         const socket = await connect(store, (serverSocket, frame) => {
             received.push(frame);
             if (frame.cmd === 2) serverSocket.send(encodeFrame(2, 1, { error_code: 0, eventId: frame.data.eventId }));
+            if (frame.cmd === 603) {
+                serverSocket.send(
+                    encodeFrame(
+                        603,
+                        1,
+                        plain({
+                            controls: [],
+                            more: 0,
+                            lastActionId: "301",
+                            queueStatus: { "603_1": { lastId: "301" } },
+                        }),
+                    ),
+                );
+            }
             if (frame.cmd === 510) {
                 const last = frame.data.first;
                 serverSocket.send(
@@ -119,8 +134,18 @@ describe("Listener background tasks", () => {
                         1,
                         plain(
                             last
-                                ? { msgs: [userMessage("101")], more: 1, lastActionId: "101", queueStatus: { "510_1": { lastId: "101" } } }
-                                : { msgs: [userMessage("102")], more: 0, lastActionId: "102", queueStatus: { "510_1": { lastId: "102" } } },
+                                ? {
+                                      msgs: [userMessage("101")],
+                                      more: 1,
+                                      lastActionId: "101",
+                                      queueStatus: { "510_1": { lastId: "101" } },
+                                  }
+                                : {
+                                      msgs: [userMessage("102")],
+                                      more: 0,
+                                      lastActionId: "102",
+                                      queueStatus: { "510_1": { lastId: "102" } },
+                                  },
                         ),
                     ),
                 );
@@ -130,7 +155,17 @@ describe("Listener background tasks", () => {
         listener!.on("offline_done", (keys) => done.push(keys));
 
         socket.send(
-            encodeFrame(1, 1, { key: "irrelevant", ...plain({ qCmds: [{ cmd: 510, subCmd: 1 }, { cmd: 515, subCmd: 0 }] }) }),
+            encodeFrame(1, 1, {
+                key: "irrelevant",
+                ...plain({
+                    qCmds: [
+                        { cmd: 515, subCmd: 0, queueName: "515_0" },
+                        { cmd: 510, subCmd: 1, queueName: "510_1" },
+                    ],
+                    ctrl_qCmds: [{ cmd: 603, subCmd: 1, queueName: "603_1" }],
+                    bk_cmds: { "510_1": "510_0" },
+                }),
+            }),
         );
         await wait(150);
 
@@ -142,8 +177,10 @@ describe("Listener background tasks", () => {
         ]);
         expect(received.some((frame) => frame.cmd === 515)).toBe(false);
         expect(messages.map((message) => message.data.msgId)).toEqual(["101", "102"]);
-        expect(done).toEqual([["510_1"]]);
+        expect(received.find((frame) => frame.cmd === 603)?.data).toMatchObject({ first: true, lastId: "300" });
+        expect(done).toEqual([["510_1", "603_1"]]);
         expect(store.get("510_1")).toBe("102");
+        expect(store.get("603_1")).toBe("301");
     });
 
     it("fetches announced missing messages with GET_MSG and tracks live queue status", async () => {
@@ -158,7 +195,9 @@ describe("Listener background tasks", () => {
         listener!.on("message", (message) => messages.push(message));
 
         socket.send(encodeFrame(1, 1, { key: "irrelevant" }));
-        socket.send(encodeFrame(501, 0, plain({ msgs: [userMessage("200")], queueStatus: { "501_0": { lastId: "200" } } })));
+        socket.send(
+            encodeFrame(501, 0, plain({ msgs: [userMessage("200")], queueStatus: { "501_0": { lastId: "200" } } })),
+        );
         socket.send(
             encodeFrame(533, 0, plain({ queueId: { cmd: 501, subCmd: 0 }, ids: [{ actionId: "201", msgId: "201" }] })),
         );

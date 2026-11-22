@@ -650,11 +650,13 @@ export class Listener extends EventEmitter<ListenerEvents> {
             this.sendActiveStatus(ActiveStatus.FirstActiveForeground);
         }
         const authData = typeof parsed.data == "string" ? await decodeEventData(parsed, this.cipherKey) : null;
-        const queues = (Array.isArray(authData?.data?.qCmds) ? authData.data.qCmds : []) as QueueCommand[];
+        const queuesOf = (value: unknown) => (Array.isArray(value) ? (value as QueueCommand[]) : []);
+        const messageQueues = queuesOf(authData?.data?.qCmds);
+        const controlQueues = queuesOf(authData?.data?.ctrl_qCmds);
         if (this.tasks.verifyMessages) {
-            this.verifier.init(queues.filter((queue) => MESSAGE_QUEUE_COMMANDS.has(queue.cmd)).map(queueKeyOf));
+            this.verifier.init(messageQueues.filter((queue) => MESSAGE_QUEUE_COMMANDS.has(queue.cmd)).map(queueKeyOf));
         }
-        if (this.tasks.syncOffline) await this.offlineSync.begin(queues);
+        if (this.tasks.syncOffline) await this.offlineSync.begin([...messageQueues, ...controlQueues]);
         if (!this.offlineSync.pulling) this.verifier.start();
     }
 
