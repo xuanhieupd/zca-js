@@ -324,7 +324,7 @@ export class API {
 
     constructor(ctx: ContextSession, zpwServiceMap: ZPWServiceMap, wsUrls: string[]) {
         this.zpwServiceMap = zpwServiceMap;
-        this.listener = new Listener(ctx, wsUrls);
+        this.listener = new Listener(ctx, wsUrls, () => this.keepAlive());
 
         this.acceptFriendRequest = acceptFriendRequestFactory(ctx, this);
         this.addGroupBlockedMember = addGroupBlockedMemberFactory(ctx, this);

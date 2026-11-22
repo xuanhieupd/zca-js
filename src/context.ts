@@ -1,5 +1,6 @@
 import type { Agent } from "http";
 import type { CookieJar } from "tough-cookie";
+import type { BackgroundTaskOptions } from "./background/backgroundTaskOptions.js";
 
 type UploadEventData = {
     fileUrl: string;
@@ -55,6 +56,15 @@ type SocketSettings = {
     offline_monitor: {
         enable: boolean;
     };
+    ping_max_timeout?: number;
+    offline_timeout?: number;
+    delay_get_msg?: number;
+    max_msg_get?: number;
+    establish_timeout?: number;
+    timeout_authen?: number;
+    interval_verify?: number;
+    max_msg_verify?: number;
+    timeout_retry_miss?: number;
 };
 
 type LoginInfo = {
@@ -175,6 +185,8 @@ export type Options = {
     polyfill: typeof fetch;
 
     imageMetadataGetter?: ImageMetadataGetter;
+
+    backgroundTasks?: Partial<BackgroundTaskOptions>;
 };
 
 const _5_MINUTES = 5 * 60 * 1000;
